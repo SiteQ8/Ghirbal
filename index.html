@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghirbal غربال — Client-Side IOC Extraction & Triage</title>
+<meta name="description" content="Ghirbal (غربال — sieve): paste raw logs, phishing emails or threat reports and sift out classified, defang-aware IOCs with enrichment pivots and CSV / JSON / STIX 2.1 export. 100% client-side.">
+<meta name="author" content="Ali AlEnezi">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Kufi+Arabic:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23060B12'/><g fill='%232DD4E8'><circle cx='30' cy='32' r='5'/><circle cx='50' cy='32' r='5'/><circle cx='70' cy='32' r='5'/><circle cx='40' cy='50' r='5'/><circle cx='60' cy='50' r='5'/><circle cx='50' cy='70' r='6' fill='%23F5B03E'/></g></svg>">
+<style>
+:root{
+  --bg:#060B12; --panel:#0C141E; --panel2:#101B28; --panel3:#152234;
+  --line:rgba(125,160,190,.14); --line2:rgba(125,160,190,.28);
+  --text:#E6EDF5; --muted:#7A8DA1; --faint:#4C5E72;
+  --acc:#2DD4E8; --acc-dim:#15606C; --acc-glow:rgba(45,212,232,.13);
+  --amber:#F5B03E;
+  --ip:#4CC2FF; --ip6:#39A0E8; --dom:#7EE787; --url:#C79BFF; --hash:#FF9E64;
+  --email:#F778BA; --cve:#FF6B6B; --atk:#FFD166; --reg:#9FB2C8; --wal:#E8C547;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --disp:'Space Grotesk',system-ui,sans-serif;
+  --kufi:'Noto Kufi Arabic',sans-serif;
+  --r:10px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--disp);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+/* ── top bar ─────────────────────────────── */
+.top{border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(45,212,232,.05),transparent)}
+.wrap{max-width:1360px;margin:0 auto;padding:0 22px}
+.top .wrap{display:flex;align-items:center;gap:14px;padding-top:16px;padding-bottom:16px;flex-wrap:wrap}
+.mark{display:flex;align-items:center;gap:12px}
+.mark .ar{font-family:var(--kufi);font-weight:700;font-size:26px;color:var(--acc);line-height:1}
+.mark .en{font-weight:700;font-size:19px;letter-spacing:.02em}
+.mark .en small{display:block;font-family:var(--mono);font-weight:400;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.badge-local{
+  margin-left:auto;display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;
+  color:var(--dom);border:1px solid rgba(126,231,135,.3);background:rgba(126,231,135,.07);
+  padding:6px 12px;border-radius:999px;
+}
+.badge-local .pulse{width:7px;height:7px;border-radius:50%;background:var(--dom);animation:pulse 2.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── sieve band (signature) ──────────────── */
+.sieve{position:relative;height:34px;overflow:hidden;border-bottom:1px solid var(--line);background:var(--panel)}
+.sieve .holes{
+  position:absolute;inset:0;
+  background-image:radial-gradient(circle 2.2px, var(--line2) 98%, transparent);
+  background-size:22px 12px;background-position:6px 6px;
+}
+.sieve .grain{position:absolute;top:-6px;width:5px;height:5px;border-radius:50%;background:var(--acc);opacity:.8;animation:fall linear infinite}
+.sieve .grain.a{left:12%;animation-duration:3.2s}
+.sieve .grain.b{left:38%;animation-duration:4.1s;animation-delay:1.2s;background:var(--amber)}
+.sieve .grain.c{left:63%;animation-duration:3.7s;animation-delay:.6s}
+.sieve .grain.d{left:86%;animation-duration:4.6s;animation-delay:2s;background:var(--url)}
+@keyframes fall{to{transform:translateY(44px)}}
+@media (prefers-reduced-motion:reduce){.sieve .grain,.badge-local .pulse{animation:none}}
+
+/* ── toolbar ─────────────────────────────── */
+.toolbar{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:30}
+.toolbar .wrap{display:flex;align-items:center;gap:9px;padding-top:11px;padding-bottom:11px;flex-wrap:wrap}
+.btn{
+  font-family:var(--mono);font-size:12px;padding:8px 13px;border-radius:var(--r);
+  border:1px solid var(--line2);background:var(--panel);color:var(--muted);transition:all .15s;
+}
+.btn:hover{color:var(--text);border-color:var(--acc-dim)}
+.btn.primary{color:#031015;background:var(--acc);border-color:var(--acc);font-weight:600}
+.btn.primary:hover{filter:brightness(1.12)}
+.btn.warn.on{color:#1A1206;background:var(--amber);border-color:var(--amber);font-weight:600}
+.btn.tog.on{color:var(--acc);border-color:var(--acc-dim);background:var(--acc-glow)}
+.spacer{flex:1}
+.filter{
+  display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line2);
+  border-radius:var(--r);padding:7px 12px;min-width:180px;
+}
+.filter input{background:none;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:12.5px;width:130px}
+.filter input::placeholder{color:var(--faint)}
+.exports{display:flex;gap:7px}
+
+/* ── main split ──────────────────────────── */
+main .wrap{display:grid;grid-template-columns:minmax(320px,4fr) 26px minmax(380px,6fr);gap:0;padding-top:20px;padding-bottom:52px;align-items:start}
+.pane-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;display:flex;align-items:center;gap:8px}
+.pane-label .sw{width:8px;height:8px;border-radius:2px}
+.inpane textarea{
+  width:100%;min-height:520px;resize:vertical;background:var(--panel);border:1px solid var(--line2);
+  border-radius:var(--r);color:var(--text);font-family:var(--mono);font-size:12.5px;line-height:1.65;
+  padding:15px;outline:none;transition:border-color .15s;
+}
+.inpane textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-glow)}
+.inpane textarea::placeholder{color:var(--faint)}
+.in-meta{margin-top:8px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+
+/* funnel divider */
+.funnel{position:relative;align-self:stretch;margin-top:26px}
+.funnel::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:linear-gradient(var(--line2),var(--acc-dim),var(--line2))}
+.funnel .tip{
+  position:absolute;left:50%;top:110px;transform:translateX(-50%) rotate(45deg);
+  width:9px;height:9px;border-right:2px solid var(--acc);border-top:2px solid var(--acc);
+}
+
+/* ── results ─────────────────────────────── */
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.stat-chip{
+  font-family:var(--mono);font-size:12px;padding:6px 11px;border-radius:8px;
+  border:1px solid color-mix(in srgb,var(--c) 32%,transparent);
+  background:color-mix(in srgb,var(--c) 9%,transparent);color:var(--c);
+}
+.stat-chip b{font-weight:600}
+.empty{
+  border:1px dashed var(--line2);border-radius:var(--r);padding:64px 30px;text-align:center;color:var(--faint);
+  font-family:var(--mono);font-size:13px;
+}
+.empty .big{font-family:var(--kufi);font-size:40px;color:var(--acc-dim);display:block;margin-bottom:14px}
+.cat{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);margin-bottom:12px;overflow:hidden}
+.cat-head{
+  width:100%;display:flex;align-items:center;gap:10px;padding:11px 14px;text-align:left;
+  border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 5%,transparent);
+}
+.cat-head .sw{width:9px;height:9px;border-radius:2px;background:var(--c);flex:none}
+.cat-head h3{font-size:14px;font-weight:600;letter-spacing:.01em}
+.cat-head .n{font-family:var(--mono);font-size:12px;color:var(--c);margin-left:4px}
+.cat-head .chev{margin-left:auto;stroke:var(--faint);transition:transform .2s;flex:none}
+.cat.closed .chev{transform:rotate(-90deg)}
+.cat.closed .rows{display:none}
+.rows{border-top:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none}
+.row:hover{background:var(--panel2)}
+.val{font-family:var(--mono);font-size:12.5px;word-break:break-all;flex:1;min-width:0}
+.tag{
+  font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:4px;flex:none;
+  letter-spacing:.05em;text-transform:uppercase;
+}
+.tag.priv{color:var(--amber);border:1px solid rgba(245,176,62,.4);background:rgba(245,176,62,.08)}
+.tag.type{color:var(--muted);border:1px solid var(--line2)}
+.acts{display:flex;gap:4px;flex:none;opacity:.55;transition:opacity .15s}
+.row:hover .acts{opacity:1}
+.icon-btn{
+  display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;
+  border:1px solid transparent;color:var(--muted);
+}
+.icon-btn:hover{color:var(--acc);border-color:var(--acc-dim);background:var(--acc-glow)}
+.icon-btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.pivots{display:flex;gap:4px;flex:none}
+.pivot{
+  font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:5px;color:var(--faint);
+  border:1px solid var(--line);text-decoration:none;
+}
+.pivot:hover{color:var(--acc);border-color:var(--acc-dim)}
+
+/* toast */
+#toast{
+  position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(70px);z-index:60;
+  font-family:var(--mono);font-size:12.5px;color:#031015;background:var(--acc);
+  padding:9px 16px;border-radius:8px;transition:transform .25s;font-weight:600;
+}
+#toast.show{transform:translateX(-50%) translateY(0)}
+
+footer{border-top:1px solid var(--line);padding:22px 0 38px;color:var(--faint);font-size:13px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center}
+footer a{color:var(--acc);text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+@media (max-width:940px){
+  main .wrap{grid-template-columns:1fr}
+  .funnel{display:none}
+  .inpane textarea{min-height:260px}
+  .respane{margin-top:22px}
+  .pivots{display:none}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="mark">
+      <span class="ar" aria-hidden="true">غربال</span>
+      <span class="en">GHIRBAL<small>IOC sieve · extraction &amp; triage</small></span>
+    </div>
+    <div class="badge-local" title="All parsing happens locally in your browser. No indicator, log line or report ever leaves this page."><span class="pulse"></span>100% client-side — nothing leaves your browser</div>
+  </div>
+</header>
+<div class="sieve" aria-hidden="true">
+  <div class="holes"></div>
+  <span class="grain a"></span><span class="grain b"></span><span class="grain c"></span><span class="grain d"></span>
+</div>
+
+<div class="toolbar">
+  <div class="wrap">
+    <button class="btn primary" id="sampleBtn">Load sample</button>
+    <button class="btn" id="uploadBtn">Upload file</button>
+    <input type="file" id="fileInput" accept=".txt,.log,.eml,.csv,.json,.md,.html" hidden>
+    <button class="btn" id="clearBtn">Clear</button>
+    <span class="spacer"></span>
+    <button class="btn warn tog" id="defangBtn" aria-pressed="false" title="Render every indicator defanged for safe sharing">Defang output</button>
+    <button class="btn tog" id="privBtn" aria-pressed="false" title="Hide RFC1918 / loopback / link-local / reserved addresses">Hide private IPs</button>
+    <label class="filter">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Filter results…" autocomplete="off">
+    </label>
+    <span class="exports">
+      <button class="btn" id="csvBtn" title="Export as CSV">CSV</button>
+      <button class="btn" id="jsonBtn" title="Export as JSON">JSON</button>
+      <button class="btn" id="stixBtn" title="Export as STIX 2.1 bundle">STIX 2.1</button>
+      <button class="btn" id="listBtn" title="Export defanged plain-text list">Defanged list</button>
+    </span>
+  </div>
+</div>
+
+<main>
+  <div class="wrap">
+    <section class="inpane">
+      <div class="pane-label"><span class="sw" style="background:var(--faint)"></span>Raw input — logs · email headers · reports</div>
+      <textarea id="input" spellcheck="false" placeholder="Paste anything here — SIEM exports, phishing email source, PDF-copied threat reports, ransom notes, pcap strings…
+
+Defanged input is understood automatically:
+hxxps://evil[.]example[.]com   185.220[.]101.42   admin[at]corp[.]com"></textarea>
+      <div class="in-meta" id="inMeta">0 chars · 0 lines</div>
+    </section>
+
+    <div class="funnel" aria-hidden="true"><span class="tip"></span></div>
+
+    <section class="respane">
+      <div class="pane-label"><span class="sw" style="background:var(--acc)"></span>Sifted indicators</div>
+      <div class="stats" id="stats"></div>
+      <div id="results"></div>
+      <div class="empty" id="empty"><span class="big">غربال</span>The sieve is empty. Paste raw text on the left —<br>indicators are extracted as you type.</div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Built by <b style="color:var(--text)">Ali AlEnezi</b> · <a href="https://3li.info" rel="noopener">3li.info</a> · <a href="https://github.com/SiteQ8/Ghirbal" rel="noopener">github.com/SiteQ8/Ghirbal</a></span>
+    <span>Pivot links (VT · Shodan · AbuseIPDB · urlscan · NVD · ATT&amp;CK) open third-party sites only when you click them.</span>
+    <span>MIT License</span>
+  </div>
+</footer>
+
+<div id="toast" role="status">Copied</div>
+
+<script>
+"use strict";
+/* ───────────────────────── refang / defang ───────────────────────── */
+function refang(t){
+  return t
+    .replace(/hxxps/gi,'https').replace(/hxxp/gi,'http').replace(/fxp/gi,'ftp')
+    .replace(/\[(?:\.|dot)\]/gi,'.').replace(/\((?:\.|dot)\)/gi,'.').replace(/\{(?:\.|dot)\}/gi,'.')
+    .replace(/\s+dot\s+/gi,'.')
+    .replace(/\[(?:@|at)\]/gi,'@').replace(/\((?:@|at)\)/gi,'@')
+    .replace(/\[:\/\/\]/g,'://').replace(/\[:\]/g,':');
+}
+function defang(v,type){
+  let s=v.replace(/\./g,'[.]');
+  if(type==='url') s=s.replace(/^http/i,'hxxp').replace(/^ftp/i,'fxp');
+  if(type==='email') s=s.replace(/@/,'[at]');
+  return s;
+}
+
+/* ───────────────────────── extraction engine ─────────────────────── */
+const FILE_EXT = new Set(('exe dll bat cmd ps1 vbs js jse wsf hta scr txt log md doc docx xls xlsx ppt pptx pdf rtf zip rar 7z tar gz bz2 jpg jpeg png gif bmp svg ico webp mp3 mp4 avi mov dat bin tmp sys ini cfg conf yml yaml json xml html htm css php asp aspx jsp py sh rb pl class jar war apk ipa db sqlite sql bak lnk iso img dmg msi cab reg pcap pcapng evtx dmp').split(' '));
+
+function ipv4Class(ip){
+  const o=ip.split('.').map(Number);
+  if(o[0]===10||(o[0]===172&&o[1]>=16&&o[1]<=31)||(o[0]===192&&o[1]===168)) return 'private';
+  if(o[0]===127) return 'loopback';
+  if(o[0]===169&&o[1]===254) return 'link-local';
+  if(o[0]===100&&o[1]>=64&&o[1]<=127) return 'cgnat';
+  if(o[0]>=224&&o[0]<=239) return 'multicast';
+  if(o[0]===0||o[0]>=240) return 'reserved';
+  return null;
+}
+
+const TYPES=[
+  {key:'ip',    label:'IPv4 addresses',   color:'var(--ip)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/ip-address/${v}`],['AbuseIPDB',`https://www.abuseipdb.com/check/${v}`],['Shodan',`https://www.shodan.io/host/${v}`]]},
+  {key:'ip6',   label:'IPv6 addresses',   color:'var(--ip6)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/ip-address/${v}`],['Shodan',`https://www.shodan.io/host/${v}`]]},
+  {key:'domain',label:'Domains',          color:'var(--dom)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/domain/${v}`],['urlscan',`https://urlscan.io/search/#page.domain%3A${v}`],['WHOIS',`https://who.is/whois/${v}`]]},
+  {key:'url',   label:'URLs',             color:'var(--url)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/search/${encodeURIComponent(v)}`],['urlscan',`https://urlscan.io/search/#${encodeURIComponent('page.url:"'+v+'"')}`]]},
+  {key:'md5',   label:'MD5 hashes',       color:'var(--hash)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/file/${v}`],['MalwareBazaar',`https://bazaar.abuse.ch/browse.php?search=md5%3A${v}`]]},
+  {key:'sha1',  label:'SHA-1 hashes',     color:'var(--hash)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/file/${v}`],['MalwareBazaar',`https://bazaar.abuse.ch/browse.php?search=sha1%3A${v}`]]},
+  {key:'sha256',label:'SHA-256 hashes',   color:'var(--hash)',
+   pivots:v=>[['VT',`https://www.virustotal.com/gui/file/${v}`],['MalwareBazaar',`https://bazaar.abuse.ch/browse.php?search=sha256%3A${v}`]]},
+  {key:'email', label:'Email addresses',  color:'var(--email)', pivots:()=>[]},
+  {key:'cve',   label:'CVE identifiers',  color:'var(--cve)',
+   pivots:v=>[['NVD',`https://nvd.nist.gov/vuln/detail/${v}`],['MITRE',`https://www.cve.org/CVERecord?id=${v}`]]},
+  {key:'attack',label:'MITRE ATT&CK techniques', color:'var(--atk)',
+   pivots:v=>[['ATT&CK',`https://attack.mitre.org/techniques/${v.replace('.','/')}/`]]},
+  {key:'registry',label:'Registry keys',  color:'var(--reg)', pivots:()=>[]},
+  {key:'wallet',label:'Crypto wallets',   color:'var(--wal)',
+   pivots:v=>[['Blockchain',`https://www.blockchain.com/explorer/search?search=${v}`]]},
+];
+const TYPE_BY_KEY=Object.fromEntries(TYPES.map(t=>[t.key,t]));
+
+function extract(raw){
+  const t=refang(raw);
+  const out=Object.fromEntries(TYPES.map(x=>[x.key,new Map()]));
+  const add=(k,v,tags=[])=>{const key=v.toLowerCase();if(!out[k].has(key))out[k].set(key,{value:v,tags})};
+
+  // hashes first (so hex isn't misread), longest first
+  for(const m of t.matchAll(/(?<![a-fA-F0-9])[a-fA-F0-9]{64}(?![a-fA-F0-9])/g)) add('sha256',m[0].toLowerCase());
+  for(const m of t.matchAll(/(?<![a-fA-F0-9])[a-fA-F0-9]{40}(?![a-fA-F0-9])/g)) add('sha1',m[0].toLowerCase());
+  for(const m of t.matchAll(/(?<![a-fA-F0-9])[a-fA-F0-9]{32}(?![a-fA-F0-9])/g)) add('md5',m[0].toLowerCase());
+
+  // URLs
+  for(const m of t.matchAll(/\b(?:https?|ftp):\/\/[^\s"'<>()\[\]{}]+/gi)){
+    const u=m[0].replace(/[.,;:!?)]+$/,'');
+    add('url',u);
+    try{const h=new URL(u).hostname; if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) add('domain',h.toLowerCase());}catch(e){}
+  }
+
+  // IPv4
+  for(const m of t.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)){
+    const ip=m[0];
+    if(ip.split('.').every(o=>+o<=255&&String(+o)===o)){
+      const c=ipv4Class(ip);
+      add('ip',ip,c?[c]:[]);
+    }
+  }
+  // IPv6
+  for(const m of t.matchAll(/\b(?:[a-fA-F0-9]{1,4}:){2,7}(?::|[a-fA-F0-9]{1,4})\b/g)){
+    const v=m[0];
+    if((v.match(/:/g)||[]).length>=2 && /[a-fA-F0-9]/.test(v) && !/^(?:\d{1,2}:){2,}\d{1,2}$/.test(v)) add('ip6',v.toLowerCase());
+  }
+
+  // emails
+  for(const m of t.matchAll(/\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,24}\b/g)){
+    add('email',m[0].toLowerCase());
+    add('domain',m[0].split('@')[1].toLowerCase());
+  }
+
+  // domains
+  for(const m of t.matchAll(/\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,24}\b/g)){
+    const d=m[0].toLowerCase();
+    const tld=d.split('.').pop();
+    if(!FILE_EXT.has(tld)) add('domain',d);
+  }
+
+  // CVE / ATT&CK / registry / wallets
+  for(const m of t.matchAll(/\bCVE-\d{4}-\d{4,7}\b/gi)) add('cve',m[0].toUpperCase());
+  for(const m of t.matchAll(/\bT1\d{3}(?:\.\d{3})?\b/g)) add('attack',m[0]);
+  for(const m of t.matchAll(/\b(?:HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG|HKLM|HKCU|HKCR|HKU|HKCC)\\[^\s"'<>|*?]+/gi)) add('registry',m[0]);
+  for(const m of t.matchAll(/\b(?:bc1[a-z0-9]{25,62}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b/g)) add('wallet',m[0]);
+
+  return out;
+}
+
+/* ───────────────────────── state + render ────────────────────────── */
+const state={defang:false,hidePriv:false,q:'',closed:new Set()};
+let extracted=Object.fromEntries(TYPES.map(t=>[t.key,new Map()]));
+
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function visibleItems(key){
+  let items=[...extracted[key].values()];
+  if(state.hidePriv&&(key==='ip')) items=items.filter(i=>i.tags.length===0);
+  if(state.q){const q=state.q.toLowerCase();items=items.filter(i=>i.value.toLowerCase().includes(q));}
+  return items;
+}
+
+function render(){
+  const stats=$('stats'),results=$('results');
+  stats.innerHTML='';results.innerHTML='';
+  let total=0;
+  TYPES.forEach(tp=>{
+    const items=visibleItems(tp.key);
+    if(!items.length) return;
+    total+=items.length;
+    const chip=document.createElement('span');
+    chip.className='stat-chip';chip.style.setProperty('--c',tp.color);
+    chip.innerHTML=`<b>${items.length}</b> ${esc(tp.label)}`;
+    stats.appendChild(chip);
+
+    const cat=document.createElement('div');
+    cat.className='cat'+(state.closed.has(tp.key)?' closed':'');
+    cat.style.setProperty('--c',tp.color);
+    const rows=items.map(it=>{
+      const shown=state.defang?defang(it.value, tp.key==='url'?'url':tp.key==='email'?'email':'') : it.value;
+      const tags=it.tags.map(x=>`<span class="tag priv">${esc(x)}</span>`).join('');
+      const pv=tp.pivots(it.value).map(([n,u])=>`<a class="pivot" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(n)}</a>`).join('');
+      return `<div class="row">
+        <span class="val">${esc(shown)}</span>${tags}
+        <span class="pivots">${pv}</span>
+        <span class="acts"><button class="icon-btn" data-copy="${esc(shown)}" title="Copy" aria-label="Copy ${esc(shown)}">
+          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button></span>
+      </div>`;
+    }).join('');
+    cat.innerHTML=`<button class="cat-head" aria-expanded="${!state.closed.has(tp.key)}" data-cat="${tp.key}">
+        <span class="sw"></span><h3>${esc(tp.label)}</h3><span class="n">${items.length}</span>
+        <svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+      </button><div class="rows">${rows}</div>`;
+    results.appendChild(cat);
+  });
+  $('empty').style.display=total?'none':'block';
+}
+
+/* events */
+$('results').addEventListener('click',e=>{
+  const cp=e.target.closest('[data-copy]');
+  if(cp){navigator.clipboard.writeText(cp.dataset.copy).then(()=>toast('Copied'));return;}
+  const ch=e.target.closest('.cat-head');
+  if(ch){const k=ch.dataset.cat;state.closed.has(k)?state.closed.delete(k):state.closed.add(k);render();}
+});
+let deb;
+$('input').addEventListener('input',()=>{
+  clearTimeout(deb);
+  deb=setTimeout(()=>{
+    const v=$('input').value;
+    $('inMeta').textContent=`${v.length.toLocaleString()} chars · ${v?v.split('\n').length:0} lines`;
+    extracted=extract(v);render();
+  },160);
+});
+$('q').addEventListener('input',e=>{state.q=e.target.value;render();});
+$('defangBtn').onclick=function(){state.defang=!state.defang;this.classList.toggle('on');this.setAttribute('aria-pressed',state.defang);render();};
+$('privBtn').onclick=function(){state.hidePriv=!state.hidePriv;this.classList.toggle('on');this.setAttribute('aria-pressed',state.hidePriv);render();};
+$('clearBtn').onclick=()=>{$('input').value='';$('input').dispatchEvent(new Event('input'));};
+$('uploadBtn').onclick=()=>$('fileInput').click();
+$('fileInput').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  f.text().then(t=>{$('input').value=t;$('input').dispatchEvent(new Event('input'));toast(`Loaded ${f.name}`);});
+};
+
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1400);}
+
+/* ───────────────────────── exports ───────────────────────── */
+function download(name,mime,content){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([content],{type:mime}));
+  a.download=name;a.click();URL.revokeObjectURL(a.href);
+}
+function allRows(){
+  const rows=[];
+  TYPES.forEach(tp=>visibleItems(tp.key).forEach(it=>rows.push({type:tp.key,value:it.value,tags:it.tags})));
+  return rows;
+}
+$('csvBtn').onclick=()=>{
+  const rows=[['type','value','tags'],...allRows().map(r=>[r.type,r.value,r.tags.join('|')])];
+  download('ghirbal-iocs.csv','text/csv;charset=utf-8','\uFEFF'+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\r\n'));
+};
+$('jsonBtn').onclick=()=>{
+  const by={};TYPES.forEach(tp=>{const v=visibleItems(tp.key);if(v.length)by[tp.key]=v.map(i=>i.value);});
+  download('ghirbal-iocs.json','application/json',JSON.stringify({tool:'Ghirbal',generated:new Date().toISOString(),iocs:by},null,2));
+};
+$('listBtn').onclick=()=>{
+  const lines=allRows().map(r=>defang(r.value, r.type==='url'?'url':r.type==='email'?'email':''));
+  download('ghirbal-defanged.txt','text/plain;charset=utf-8',lines.join('\n'));
+};
+$('stixBtn').onclick=()=>{
+  const now=new Date().toISOString();
+  const pat={ip:v=>`[ipv4-addr:value = '${v}']`, ip6:v=>`[ipv6-addr:value = '${v}']`,
+    domain:v=>`[domain-name:value = '${v}']`, url:v=>`[url:value = '${v.replace(/'/g,"\\'")}']`,
+    md5:v=>`[file:hashes.MD5 = '${v}']`, sha1:v=>`[file:hashes.'SHA-1' = '${v}']`,
+    sha256:v=>`[file:hashes.'SHA-256' = '${v}']`, email:v=>`[email-addr:value = '${v}']`,
+    registry:v=>`[windows-registry-key:key = '${v.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}']`};
+  const objects=[];
+  allRows().forEach(r=>{
+    if(pat[r.type]){
+      objects.push({type:'indicator',spec_version:'2.1',id:'indicator--'+crypto.randomUUID(),
+        created:now,modified:now,name:`Ghirbal ${r.type}: ${r.value}`,
+        pattern:pat[r.type](r.value),pattern_type:'stix',valid_from:now,
+        labels:['ghirbal-extracted',...r.tags]});
+    }else if(r.type==='cve'){
+      objects.push({type:'vulnerability',spec_version:'2.1',id:'vulnerability--'+crypto.randomUUID(),
+        created:now,modified:now,name:r.value,
+        external_references:[{source_name:'cve',external_id:r.value}]});
+    }
+  });
+  download('ghirbal-bundle.json','application/json',
+    JSON.stringify({type:'bundle',id:'bundle--'+crypto.randomUUID(),objects},null,2));
+};
+
+/* ───────────────────────── sample ───────────────────────── */
+$('sampleBtn').onclick=()=>{
+  $('input').value=SAMPLE;$('input').dispatchEvent(new Event('input'));toast('Sample incident loaded');
+};
+const SAMPLE=`===== INCIDENT IR-2026-0142 — TRIAGE NOTES (synthetic sample) =====
+Analyst: SOC-T2 | Severity: High | Source: EDR + mail gateway + proxy
+
+[Phishing wave]
+From: "IT Helpdesk" <support[at]corp-it-desk[.]com>
+Reply-To: refund.department@billing-secure-portal.net
+Lure URL: hxxps://login[.]corp-it-desk[.]com/session/verify?id=88231
+Redirect chain -> hxxp://cdn-static-delivery[.]net/o/payload.hta
+
+[Payload / EDR]
+Dropper:  invoice_march.hta
+MD5:      d41d8cd98f00b204e9800998ecf8427e
+SHA1:     3395856ce81f2b7382dee72602f798b642f14140
+SHA256:   275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f
+Persistence: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\UpdaterSvc
+Technique map: T1566.001 (spearphish attachment), T1547.001 (registry run key), T1105 (ingress tool transfer)
+
+[C2 / network]
+Beacon:   185.220.101.42:443 (JA3 matched)
+Fallback: 91.92.240[.]119 and 2a06:98c1:3121::7d3a
+Internal pivot attempts from 10.14.2.77 and 192.168.50.9 (contained)
+DNS:      exfil-sync.datavault-storage.com | telemetry.win-metrics[.]org
+
+[Vulnerability angle]
+Initial access host unpatched for CVE-2024-21412 and CVE-2023-23397.
+
+[Ransom note artifacts]
+Contact:  recovery-desk@onionmail.org
+BTC:      1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2
+bech32:   bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq
+===== END =====`;
+
+$('input').dispatchEvent(new Event('input'));
+</script>
+</body>
+</html>
